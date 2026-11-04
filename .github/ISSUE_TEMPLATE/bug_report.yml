@@ -45,3 +45,4 @@ body:
       label: CookedDisk Diagnostics / Logs
       description: Paste lines from the "Copy diagnostics" button in CookedDisk.
       render: shell
+
