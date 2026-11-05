@@ -493,9 +493,22 @@ class DriveClient:
                         timeout=90,
                     )
 
+                chunk_start = time.time()
                 response = self._execute_with_backoff(
                     _send_chunk, is_cancel_requested=is_cancel_requested
                 )
+                chunk_elapsed = time.time() - chunk_start
+
+                # Bandwidth Limiter (Ping Protection)
+                if self.config.max_upload_kbps > 0 and len(chunk_data) > 0:
+                    target_seconds = (len(chunk_data) * 8.0) / (self.config.max_upload_kbps * 1000.0)
+                    throttle_delay = target_seconds - chunk_elapsed
+                    if throttle_delay > 0:
+                        sleep_end = time.time() + throttle_delay
+                        while time.time() < sleep_end:
+                            if is_cancel_requested and is_cancel_requested():
+                                raise InterruptedError("Upload canceled during bandwidth throttling.")
+                            time.sleep(min(0.05, sleep_end - time.time()))
 
                 if response.status_code in (200, 201):
                     # Upload finished!

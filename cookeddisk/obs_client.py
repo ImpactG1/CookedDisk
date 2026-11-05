@@ -224,6 +224,110 @@ class ObsClient:
                 logger.debug(f"Bitrate change to {bitrate_kbps} kbps could not be applied to active output.")
             return success
 
+    def auto_configure_obs(
+        self,
+        recording_dir: Optional[str] = None,
+        target_bitrate_kbps: Optional[int] = None,
+    ) -> Tuple[bool, List[str]]:
+        """
+        Automatically pushes optimal configuration to OBS Studio over WebSocket v5:
+        1. Set Output Mode to Advanced
+        2. Set Recording Format to Hybrid MP4 / MKV
+        3. Enable Automatic File Splitting by Time (30 seconds)
+        4. Configure Target Bitrate (default 10,000 kbps)
+        5. Synchronize Recording Directory to CookedDisk's watched folder
+        6. Select Hardware GPU Encoder if available
+        Returns (success: bool, actions_applied: List[str]).
+        """
+        with self._lock:
+            if not self.is_connected():
+                if not self.connect():
+                    return False, [
+                        "Cannot connect to OBS WebSocket. Please start OBS Studio and verify Tools -> WebSocket Server Settings is enabled."
+                    ]
+
+            actions: List[str] = []
+            target_br = target_bitrate_kbps or self.config.target_bitrate_kbps
+            target_dir = recording_dir or self.config.obs_recording_dir
+
+            # 1. Output Mode: Advanced
+            try:
+                self._client.set_profile_parameter("Output", "Mode", "Advanced")
+                actions.append("Set Output Mode to Advanced")
+            except Exception as e:
+                logger.debug(f"Could not set Output Mode: {e}")
+
+            # 2. Recording Format: Hybrid MP4 / MKV
+            fmt_set = False
+            for cat, param, val in [
+                ("AdvOut", "RecFormat2", "fragmented_mp4"),
+                ("AdvOut", "RecFormat", "fragmented_mp4"),
+                ("SimpleOutput", "RecFormat", "fragmented_mp4"),
+            ]:
+                try:
+                    self._client.set_profile_parameter(cat, param, val)
+                    fmt_set = True
+                except Exception:
+                    pass
+
+            if fmt_set:
+                actions.append("Configured safe crash-resistant format (Hybrid MP4)")
+
+            # 3. Automatic File Splitting: 30 seconds
+            split_set = False
+            for cat, param, val in [
+                ("AdvOut", "RecSplitFile", "true"),
+                ("AdvOut", "RecSplitType", "time"),
+                ("AdvOut", "RecSplitTime", "30"),
+            ]:
+                try:
+                    self._client.set_profile_parameter(cat, param, val)
+                    split_set = True
+                except Exception:
+                    pass
+
+            if split_set:
+                actions.append("Enabled Automatic File Splitting (every 30 seconds)")
+
+            # 4. Hardware Encoder selection
+            try:
+                enc_param = self._client.get_profile_parameter("AdvOut", "RecEncoder")
+                current_enc = getattr(enc_param, "parameter_value", "")
+            except Exception:
+                current_enc = ""
+
+            if not current_enc or "x264" in current_enc.lower():
+                # Attempt to set hardware encoder: NVENC -> AMF -> QSV
+                enc_set = False
+                for candidate in ("jim_nvenc", "ffmpeg_nvenc", "amd_amf_h264", "obs_qsv11"):
+                    try:
+                        self._client.set_profile_parameter("AdvOut", "RecEncoder", candidate)
+                        actions.append(f"Configured Hardware Video Encoder ({candidate})")
+                        enc_set = True
+                        break
+                    except Exception:
+                        pass
+                if not enc_set and current_enc:
+                    actions.append(f"Kept encoder ({current_enc})")
+            else:
+                actions.append(f"Retained active Hardware Encoder ({current_enc})")
+
+            # 5. Bitrate configuration
+            self.set_recording_bitrate(target_br)
+            actions.append(f"Configured Video Bitrate to {target_br} kbps")
+
+            # 6. Synchronize recording path
+            if target_dir:
+                try:
+                    p = str(Path(target_dir).resolve())
+                    self._client.set_record_directory(p)
+                    actions.append(f"Synchronized OBS recording directory to: {p}")
+                except Exception as e:
+                    logger.debug(f"Could not set record directory: {e}")
+
+            logger.info(f"Auto-configured OBS with {len(actions)} actions.")
+            return True, actions
+
     def run_setup_check(self) -> List[SetupCheckItem]:
         """
         Runs comprehensive setup check against OBS Studio.

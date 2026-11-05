@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -98,9 +99,14 @@ class SetupCheckView(QWidget):
         header.addLayout(title_box)
         header.addStretch()
 
+        self.btn_auto_config = QPushButton("Auto-Configure OBS")
+        self.btn_auto_config.setProperty("class", "primaryButton")
+        self.btn_auto_config.setIcon(get_icon("check", "#FFFFFF", 16))
+        self.btn_auto_config.clicked.connect(self.auto_configure_obs)
+        header.addWidget(self.btn_auto_config)
+
         self.btn_check_now = QPushButton("Run Check Now")
-        self.btn_check_now.setProperty("class", "primaryButton")
-        self.btn_check_now.setIcon(get_icon("refresh", "#FFFFFF", 16))
+        self.btn_check_now.setIcon(get_icon("refresh", "#888888", 16))
         self.btn_check_now.clicked.connect(self.run_check)
         header.addWidget(self.btn_check_now)
 
@@ -131,4 +137,22 @@ class SetupCheckView(QWidget):
         for it in items:
             card = SetupCheckCard(it)
             self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
+
+    def auto_configure_obs(self) -> None:
+        success, actions = self.obs_client.auto_configure_obs()
+        if success:
+            actions_text = "\n• " + "\n• ".join(actions)
+            QMessageBox.information(
+                self,
+                "OBS Auto-Configured",
+                f"Successfully applied optimal settings to OBS Studio:\n{actions_text}\n\nRunning diagnostic check now...",
+            )
+            self.run_check()
+        else:
+            err_msg = "\n• " + "\n• ".join(actions)
+            QMessageBox.warning(
+                self,
+                "Auto-Configure Failed",
+                f"Could not automatically configure OBS Studio:\n{err_msg}",
+            )
 

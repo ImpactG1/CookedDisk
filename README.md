@@ -14,7 +14,7 @@
 [![Qt6 / PySide6](https://img.shields.io/badge/GUI-PySide6%20(Qt%206)-41CD52.svg?style=for-the-badge&logo=qt&logoColor=white)](https://www.qt.io/)
 [![Google Drive API](https://img.shields.io/badge/Cloud-Google%20Drive%20v3-4285F4.svg?style=for-the-badge&logo=googledrive&logoColor=white)](https://developers.google.com/drive)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%2F%2010-0078D4.svg?style=for-the-badge&logo=windows11&logoColor=white)](https://www.microsoft.com/windows)
-[![Tests](https://img.shields.io/badge/Tests-22%20Passed%20(100%25)-brightgreen.svg?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-24%20Passed%20(100%25)-brightgreen.svg?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/ImpactG1/CookedDisk?style=for-the-badge&logo=github&color=gold)](https://github.com/ImpactG1/CookedDisk/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/ImpactG1/CookedDisk?style=for-the-badge&logo=github)](https://github.com/ImpactG1/CookedDisk/issues)
@@ -116,6 +116,22 @@ Built strictly to modern Windows design standards:
 - **Fluent & Lucide outline icons** rendered from vector SVGs.
 - Dynamic dark/light theme switching following Windows `AppsUseLightTheme`.
 - Discreet **System Tray integration** with live status tooltips and quick pause/resume toggles.
+
+### 5. Upload Bandwidth Limiter & In-Game Ping Protection
+To prevent competitive game ping spikes (e.g. in *Valorant*, *Apex*, *CS2*), CookedDisk includes configurable chunk-pacing bandwidth limits (Uncapped, 20, 30, 40, 50, or 60 Mbps). This prevents your upload channel from saturating and keeps your in-game latency low and jitter-free.
+
+### 6. One-Click Automated OBS Configuration
+Rather than hunting through menus, the **Setup check** screen includes an **"Auto-Configure OBS"** button that talks over WebSocket v5 to automatically configure Output Mode (Advanced), Hybrid MP4 format, 30-second time splitting, hardware GPU encoder, and optimal bitrate.
+
+---
+
+## ❓ Frequently Asked Questions
+
+### Won't 30-second segmenting create visible cuts or ruin my video?
+**No! Not at all.** Here is why:
+1. **Keyframe-Aligned Splitting**: In OBS Studio, automatic time-based splitting splits on the exact nearest I-frame (keyframe) at the GOP boundary. There are **zero dropped frames, zero audio dropouts, and zero timestamp gaps** between segment $N$ and segment $N+1$.
+2. **Lossless Stream Copy Concat (`-c copy`)**: When merging segments back together with CookedDisk's built-in FFmpeg tool, FFmpeg executes a binary stream copy. It does not re-encode. The resulting merged MP4 is **bit-for-bit and frame-for-frame identical** to if you had recorded a single continuous 5-hour file without splitting.
+3. **Crash Insurance**: If a power outage or crash occurs, standard single-file MP4s become completely unreadable. With 30-second segments, you lose at most 1–2 seconds of gameplay.
 
 ---
 

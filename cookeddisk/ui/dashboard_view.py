@@ -168,7 +168,7 @@ class DashboardView(QWidget):
         self.obs_status_badge.style().unpolish(self.obs_status_badge)
         self.obs_status_badge.style().polish(self.obs_status_badge)
 
-    def update_upload_status(self, snapshot: UploadStatusSnapshot):
+    def update_upload_status(self, snapshot: UploadStatusSnapshot, max_upload_kbps: int = 0):
         if snapshot.is_active and snapshot.current_segment_name:
             curr_mb = snapshot.current_uploaded_bytes / (1024 * 1024)
             total_mb = snapshot.current_file_size / (1024 * 1024)
@@ -180,12 +180,18 @@ class DashboardView(QWidget):
             )
             self.progress_bar.setValue(pct)
             self.val_speed.setText(f"{speed_mb:.1f} MB/s")
-            self.sub_speed.setText(f"Active chunk transfer")
+            if max_upload_kbps > 0:
+                self.sub_speed.setText(f"Capped at {max_upload_kbps // 1000} Mbps (Ping Safe)")
+            else:
+                self.sub_speed.setText(f"Active chunk transfer")
         else:
             self.upload_desc_label.setText("No active upload in progress.")
             self.progress_bar.setValue(0)
             self.val_speed.setText("0.0 MB/s")
-            self.sub_speed.setText("Queue idle")
+            if max_upload_kbps > 0:
+                self.sub_speed.setText(f"Queue idle (Cap: {max_upload_kbps // 1000}M)")
+            else:
+                self.sub_speed.setText("Queue idle")
 
         # Update queue metric
         queue_mb = snapshot.total_queue_bytes / (1024 * 1024)

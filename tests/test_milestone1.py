@@ -173,3 +173,33 @@ def test_uploader_worker_end_to_end(temp_env):
     assert recent[0].drive_file_id == "drive_file_id_999"
     assert recent[0].drive_md5 == expected_md5
 
+
+def test_upload_bandwidth_limiting(tmp_path: Path):
+    from unittest.mock import patch
+    from cookeddisk.drive_client import DriveAuthManager
+
+    config = AppConfig(
+        chunk_size_bytes=256 * 1024,
+        max_upload_kbps=50000,  # 50 Mbps
+    )
+    auth_mgr = MagicMock(spec=DriveAuthManager)
+    creds = MagicMock()
+    creds.valid = True
+    creds.token = "fake_tok"
+    auth_mgr.get_valid_credentials.return_value = creds
+
+    client = DriveClient(auth_manager=auth_mgr, config=config)
+
+    test_file = tmp_path / "speed_test.mp4"
+    test_file.write_bytes(b"X" * 1024)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "drive_fid_1", "name": test_file.name}
+
+    with patch.object(client, "initiate_resumable_upload", return_value="https://upload.url"):
+        with patch.object(client, "get_file_metadata", return_value={"size": 1024, "md5Checksum": "abc"}):
+            with patch("requests.put", return_value=mock_resp):
+                res, uri = client.upload_file_resumable(test_file, parent_folder_id="parent1")
+                assert res.file_id == "drive_fid_1"
+

@@ -62,6 +62,7 @@ class AppConfig:
     max_upload_retries: int = 10
     retry_base_delay_sec: float = 2.0
     retry_max_delay_sec: float = 60.0
+    max_upload_kbps: int = 0  # 0 = Uncapped; otherwise cap speed (e.g. 40000 = 40 Mbps ping protection)
 
     # System and UI settings
     launch_at_startup: bool = False

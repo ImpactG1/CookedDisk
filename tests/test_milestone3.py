@@ -162,3 +162,24 @@ def test_adaptive_bitrate_queue_integration(tmp_path):
             assert dec2.level == GuardLevel.HARD_CAP
             obs_client.pause_recording.assert_called_once()
 
+
+def test_auto_configure_obs(obs_mock_setup):
+    client, config = obs_mock_setup
+    mock_req_client = MagicMock()
+    client._client = mock_req_client
+    client.state.is_connected = True
+
+    mock_enc_param = MagicMock()
+    mock_enc_param.parameter_value = "obs_x264"
+    mock_req_client.get_profile_parameter.return_value = mock_enc_param
+
+    success, actions = client.auto_configure_obs(
+        recording_dir="C:/Videos/OBS_Rec", target_bitrate_kbps=12000
+    )
+    assert success is True
+    assert len(actions) >= 4
+    # Check that settings were pushed
+    mock_req_client.set_profile_parameter.assert_any_call("Output", "Mode", "Advanced")
+    mock_req_client.set_profile_parameter.assert_any_call("AdvOut", "RecSplitFile", "true")
+    mock_req_client.set_record_directory.assert_called_once()
+

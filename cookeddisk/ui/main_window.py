@@ -273,7 +273,7 @@ class MainWindow(QMainWindow):
 
         # 3. Update upload status & metrics
         up_snap = self.upload_worker.get_status_snapshot()
-        self.view_dashboard.update_upload_status(up_snap)
+        self.view_dashboard.update_upload_status(up_snap, self.config.max_upload_kbps)
         self.view_dashboard.update_guard_metrics(
             current_bitrate_kbps=self.queue_guard.current_bitrate_kbps,
             guard_level=decision.level.value,

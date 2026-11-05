@@ -110,11 +110,16 @@ def test_setup_check_view(qapp):
             fix_instruction="Change to Hybrid MP4",
         ),
     ]
+    mock_obs.auto_configure_obs.return_value = (True, ["Configured Hybrid MP4", "Enabled Split"])
 
     view = SetupCheckView(mock_obs)
     view.run_check()
     # Check that cards were populated (2 items + stretch item)
     assert view.cards_layout.count() >= 3
+
+    with patch("PySide6.QtWidgets.QMessageBox.information"):
+        view.auto_configure_obs()
+        mock_obs.auto_configure_obs.assert_called_once()
 
 
 def test_main_window_assembly(qapp, tmp_path):

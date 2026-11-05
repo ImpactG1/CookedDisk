@@ -224,6 +224,21 @@ class SettingsView(QWidget):
             self.combo_crit_action.setCurrentIndex(idx)
         form_guard.addRow("Critical Queue Action:", self.combo_crit_action)
 
+        # Bandwidth Limiter (Ping Protection)
+        self.combo_speed_limit = QComboBox()
+        self.combo_speed_limit.addItem("Uncapped (Maximum Upload Speed)", 0)
+        self.combo_speed_limit.addItem("20 Mbps — Ultra-Safe Ping Protection", 20000)
+        self.combo_speed_limit.addItem("30 Mbps — Competitive Gaming Safe", 30000)
+        self.combo_speed_limit.addItem("40 Mbps — Balanced Upload", 40000)
+        self.combo_speed_limit.addItem("50 Mbps — High Throughput", 50000)
+        self.combo_speed_limit.addItem("60 Mbps — Near-Line Rate", 60000)
+        idx_spd = self.combo_speed_limit.findData(self.config.max_upload_kbps)
+        if idx_spd >= 0:
+            self.combo_speed_limit.setCurrentIndex(idx_spd)
+        else:
+            self.combo_speed_limit.setCurrentIndex(0)
+        form_guard.addRow("Bandwidth Limit (Ping Safe):", self.combo_speed_limit)
+
         guard_layout.addLayout(form_guard)
         layout.addWidget(guard_box)
 
@@ -351,6 +366,7 @@ class SettingsView(QWidget):
         self.config.target_bitrate_kbps = self.spin_target_br.value()
         self.config.min_bitrate_kbps = self.spin_min_br.value()
         self.config.critical_action = self.combo_crit_action.currentData()
+        self.config.max_upload_kbps = self.combo_speed_limit.currentData()
 
         self.config.launch_at_startup = self.chk_startup.isChecked()
         self.config.minimize_to_tray_on_close = self.chk_tray.isChecked()
