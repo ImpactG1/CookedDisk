@@ -236,11 +236,15 @@ class MainWindow(QMainWindow):
 
     def _on_settings_saved(self, updated_cfg: AppConfig) -> None:
         self.config = updated_cfg
+        app = QApplication.instance()
+        if app:
+            app.setQuitOnLastWindowClosed(not self.config.minimize_to_tray_on_close)
         self.watcher.set_folder(self.config.obs_recording_dir)
         self.watcher.config = self.config
         self.upload_worker.config = self.config
         self.queue_guard.config = self.config
         self.obs_client.config = self.config
+        self.obs_client.reset_auth_backoff()
         self.nav_bar.set_connected_user(self.auth_manager.get_connected_user())
         logger.info("Applied updated settings across all sub-services.")
 
@@ -298,14 +302,18 @@ class MainWindow(QMainWindow):
             self.hide()
             self.tray_icon.showMessage(
                 "CookedDisk",
-                "CookedDisk is still running in the background.",
+                "CookedDisk is minimized to the system tray.",
                 QSystemTrayIcon.Information,
                 2000,
             )
             event.ignore()
         else:
             self._shutdown_services()
+            self.tray_icon.hide()
             event.accept()
+            app = QApplication.instance()
+            if app:
+                app.quit()
 
     def _shutdown_services(self) -> None:
         logger.info("Shutting down CookedDisk services...")

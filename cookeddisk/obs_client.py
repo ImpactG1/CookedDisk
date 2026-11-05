@@ -53,16 +53,21 @@ class ObsClient:
         self._poll_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self.on_state_change: Optional[Callable[[ObsState], None]] = None
+        self.last_auth_error: Optional[str] = None
+        self.last_error_message: Optional[str] = None
+        self._last_failed_attempt_time: float = 0.0
+        self._auth_backoff_sec: float = 25.0
 
-    def connect(
+    def connect_with_status(
         self,
         host: Optional[str] = None,
         port: Optional[int] = None,
         password: Optional[str] = None,
-    ) -> bool:
+    ) -> tuple[bool, str]:
         if obs is None:
-            logger.error("obsws-python library is not installed.")
-            return False
+            msg = "obsws-python library is not installed."
+            logger.error(msg)
+            return False, msg
 
         h = host or self.config.obs_host
         p = port or self.config.obs_port
@@ -74,14 +79,85 @@ class ObsClient:
                 logger.info(f"Connecting to OBS WebSocket at {h}:{p}...")
                 self._client = obs.ReqClient(host=h, port=p, password=pw, timeout=4)
                 self.state.is_connected = True
+                self.last_auth_error = None
+                self.last_error_message = None
+                self._last_failed_attempt_time = 0.0
                 logger.info("Connected to OBS WebSocket successfully.")
                 self.update_state_now()
-                return True
+                return True, f"Connected to OBS WebSocket at {h}:{p} successfully."
             except Exception as e:
-                logger.warning(f"Could not connect to OBS at {h}:{p}: {e}")
+                # Clean up dangling socket if ReqClient failed during handshake/auth
+                import sys
+
+                tb = sys.exc_info()[2]
+                while tb:
+                    frame = tb.tb_frame
+                    if "self" in frame.f_locals and hasattr(frame.f_locals["self"], "base_client"):
+                        try:
+                            frame.f_locals["self"].base_client.ws.close()
+                        except Exception:
+                            pass
+                        break
+                    tb = tb.tb_next
+
                 self._client = None
                 self.state.is_connected = False
-                return False
+                self._last_failed_attempt_time = time.time()
+
+                err_str = str(e)
+                err_lower = err_str.lower()
+
+                if "authentication enabled but no password provided" in err_lower or (
+                    "authentication" in err_lower and "no password" in err_lower
+                ):
+                    self.last_auth_error = "AUTH_REQUIRED_NO_PASSWORD"
+                    msg = (
+                        "OBS WebSocket has authentication enabled, but no password is configured in CookedDisk.\n\n"
+                        "To fix this, choose one of these options:\n"
+                        "1. (Recommended) In OBS, click Tools -> WebSocket Server Settings and uncheck 'Enable Authentication'.\n"
+                        "2. Or in OBS, click Tools -> WebSocket Server Settings -> Show Connect Info -> copy Server Password and paste it into CookedDisk Settings."
+                    )
+                elif "authentication failed" in err_lower or "4009" in err_str:
+                    self.last_auth_error = "AUTH_INVALID_PASSWORD"
+                    msg = (
+                        "OBS WebSocket authentication failed (password incorrect).\n\n"
+                        "To fix this:\n"
+                        "1. In OBS, go to Tools -> WebSocket Server Settings -> Show Connect Info.\n"
+                        "2. Copy Server Password and paste it into CookedDisk Settings (or uncheck 'Enable Authentication')."
+                    )
+                elif (
+                    "connection refused" in err_lower
+                    or "10061" in err_str
+                    or "timed out" in err_lower
+                    or "timeout" in err_lower
+                ):
+                    self.last_auth_error = "CONNECTION_REFUSED"
+                    msg = (
+                        f"Could not connect to OBS WebSocket at {h}:{p}.\n\n"
+                        "Please verify that OBS Studio is running and Tools -> WebSocket Server Settings has 'Enable WebSocket server' checked."
+                    )
+                else:
+                    self.last_auth_error = "CONNECTION_ERROR"
+                    msg = f"Could not connect to OBS WebSocket at {h}:{p}: {err_str}"
+
+                self.last_error_message = msg
+                logger.warning(f"OBS connection failed: {msg}")
+                return False, msg
+
+    def connect(
+        self,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        password: Optional[str] = None,
+    ) -> bool:
+        success, _ = self.connect_with_status(host=host, port=port, password=password)
+        return success
+
+    def reset_auth_backoff(self) -> None:
+        """Resets failed attempt timestamp so polling or next action can immediately retry."""
+        self._last_failed_attempt_time = 0.0
+        self.last_auth_error = None
+        self.last_error_message = None
 
     def disconnect(self) -> None:
         with self._lock:
@@ -152,7 +228,15 @@ class ObsClient:
     def _poll_loop(self, interval_sec: float) -> None:
         while not self._stop_event.is_set():
             if not self.is_connected() and self.config.obs_auto_connect:
-                self.connect()
+                # If authentication failed (missing or incorrect password), do not spam OBS every 2s.
+                # Back off to avoid flooding OBS logs with 'unidentified Kick' messages.
+                now = time.time()
+                is_auth_error = self.last_auth_error in (
+                    "AUTH_REQUIRED_NO_PASSWORD",
+                    "AUTH_INVALID_PASSWORD",
+                )
+                if not is_auth_error or (now - self._last_failed_attempt_time >= self._auth_backoff_sec):
+                    self.connect()
             else:
                 self.update_state_now()
             self._stop_event.wait(interval_sec)
@@ -241,9 +325,10 @@ class ObsClient:
         """
         with self._lock:
             if not self.is_connected():
-                if not self.connect():
+                success, msg = self.connect_with_status()
+                if not success:
                     return False, [
-                        "Cannot connect to OBS WebSocket. Please start OBS Studio and verify Tools -> WebSocket Server Settings is enabled."
+                        f"Cannot connect to OBS WebSocket: {self.last_error_message or msg}"
                     ]
 
             actions: List[str] = []
@@ -341,20 +426,46 @@ class ObsClient:
             connected = self.connect()
 
         if not connected:
-            results.append(
-                SetupCheckItem(
-                    key="connection",
-                    title="OBS WebSocket Connection",
-                    status="FAIL",
-                    current_value=f"Disconnected ({self.config.obs_host}:{self.config.obs_port})",
-                    fix_instruction=(
-                        "In OBS Studio, click Tools -> WebSocket Server Settings. "
-                        "Check 'Enable WebSocket server', verify Server Port (default 4455), "
-                        "generate or set a Server Password, and save. "
-                        "Then enter the matching Port and Password in CookedDisk Settings."
-                    ),
+            if self.last_auth_error == "AUTH_REQUIRED_NO_PASSWORD":
+                results.append(
+                    SetupCheckItem(
+                        key="connection",
+                        title="OBS WebSocket Authentication",
+                        status="FAIL",
+                        current_value="Authentication enabled in OBS, but no password configured in CookedDisk",
+                        fix_instruction=(
+                            "In OBS Studio -> Tools -> WebSocket Server Settings: either uncheck 'Enable Authentication' "
+                            "(recommended for local use) or click 'Show Connect Info', copy Server Password, and paste it into CookedDisk Settings."
+                        ),
+                    )
                 )
-            )
+            elif self.last_auth_error == "AUTH_INVALID_PASSWORD":
+                results.append(
+                    SetupCheckItem(
+                        key="connection",
+                        title="OBS WebSocket Authentication",
+                        status="FAIL",
+                        current_value="Authentication failed (password incorrect)",
+                        fix_instruction=(
+                            "The password in CookedDisk Settings does not match OBS Studio. "
+                            "In OBS Studio -> Tools -> WebSocket Server Settings -> Show Connect Info, copy Server Password into CookedDisk Settings."
+                        ),
+                    )
+                )
+            else:
+                results.append(
+                    SetupCheckItem(
+                        key="connection",
+                        title="OBS WebSocket Connection",
+                        status="FAIL",
+                        current_value=f"Disconnected ({self.config.obs_host}:{self.config.obs_port})",
+                        fix_instruction=(
+                            "In OBS Studio, click Tools -> WebSocket Server Settings. "
+                            "Check 'Enable WebSocket server', verify Server Port (default 4455). "
+                            "If 'Enable Authentication' is checked, copy Server Password into CookedDisk Settings."
+                        ),
+                    )
+                )
             # Cannot check remaining items if not connected
             for key, title in [
                 ("recording_path", "Recording Folder"),

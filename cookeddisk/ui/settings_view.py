@@ -324,7 +324,7 @@ class SettingsView(QWidget):
         host = self.txt_obs_host.text().strip()
         port = self.spin_obs_port.value()
         pw = self.txt_obs_pw.text()
-        success = self.obs_client.connect(host=host, port=port, password=pw)
+        success, message = self.obs_client.connect_with_status(host=host, port=port, password=pw)
         if success:
             QMessageBox.information(
                 self, "OBS Connection", f"Connected to OBS WebSocket at {host}:{port} successfully!"
@@ -333,8 +333,7 @@ class SettingsView(QWidget):
             QMessageBox.warning(
                 self,
                 "OBS Connection Failed",
-                f"Could not connect to OBS WebSocket at {host}:{port}.\n"
-                "Please verify OBS is running and Tools → WebSocket Server Settings is enabled.",
+                message,
             )
 
     def _do_sign_in(self) -> None:
@@ -376,6 +375,7 @@ class SettingsView(QWidget):
         # Update Windows startup registry
         set_run_at_startup(self.config.launch_at_startup)
 
+        self.obs_client.reset_auth_backoff()
         self.config.save()
         self.settings_saved.emit(self.config)
         QMessageBox.information(self, "Settings Saved", "Application settings have been saved.")

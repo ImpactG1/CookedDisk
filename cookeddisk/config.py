@@ -66,7 +66,7 @@ class AppConfig:
 
     # System and UI settings
     launch_at_startup: bool = False
-    minimize_to_tray_on_close: bool = True
+    minimize_to_tray_on_close: bool = False
     theme_mode: str = "system"  # "system", "dark", "light"
     ffmpeg_custom_path: str = ""
 

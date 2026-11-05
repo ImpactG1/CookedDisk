@@ -40,6 +40,7 @@ def main() -> None:
     app.setStyle("Fusion")
 
     config = AppConfig.load()
+    app.setQuitOnLastWindowClosed(not config.minimize_to_tray_on_close)
     window = MainWindow(config)
 
     if not args.tray:

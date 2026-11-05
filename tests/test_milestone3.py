@@ -183,3 +183,36 @@ def test_auto_configure_obs(obs_mock_setup):
     mock_req_client.set_profile_parameter.assert_any_call("AdvOut", "RecSplitFile", "true")
     mock_req_client.set_record_directory.assert_called_once()
 
+
+def test_obs_connection_auth_required_error(obs_mock_setup):
+    client, _ = obs_mock_setup
+    with patch("obsws_python.ReqClient", side_effect=Exception("authentication enabled but no password provided")):
+        success, msg = client.connect_with_status()
+        assert success is False
+        assert client.last_auth_error == "AUTH_REQUIRED_NO_PASSWORD"
+        assert "uncheck 'Enable Authentication'" in msg
+        assert "Show Connect Info" in msg
+
+
+def test_obs_connection_auth_invalid_password(obs_mock_setup):
+    client, _ = obs_mock_setup
+    with patch("obsws_python.ReqClient", side_effect=Exception("Authentication failed: code 4009")):
+        success, msg = client.connect_with_status()
+        assert success is False
+        assert client.last_auth_error == "AUTH_INVALID_PASSWORD"
+        assert "password incorrect" in msg
+
+
+def test_setup_check_shows_auth_error(obs_mock_setup):
+    client, _ = obs_mock_setup
+    client.disconnect()
+    client.last_auth_error = "AUTH_REQUIRED_NO_PASSWORD"
+
+    with patch.object(client, "connect", return_value=False):
+        results = client.run_setup_check()
+        conn_check = next(r for r in results if r.key == "connection")
+        assert conn_check.status == "FAIL"
+        assert "Authentication" in conn_check.title
+        assert "uncheck 'Enable Authentication'" in conn_check.fix_instruction
+
+
