@@ -79,39 +79,24 @@ class SettingsView(QWidget):
         acc_box = QFrame()
         acc_box.setProperty("class", "card")
         acc_layout = QVBoxLayout(acc_box)
-        acc_layout.setSpacing(10)
+        acc_layout.setSpacing(12)
 
         acc_title = QLabel("Google Drive Account")
         acc_title.setStyleSheet("font-size: 13px; font-weight: 600;")
         acc_layout.addWidget(acc_title)
 
-        acc_sub = QLabel("Files are uploaded to your personal Google Drive (scope: drive.file).")
-        acc_sub.setStyleSheet("font-size: 12px; color: #888888;")
+        acc_sub = QLabel(
+            "Uploads gameplay recordings directly to your Google Drive (scope: drive.file).\n"
+            "Step 1: Import your OAuth credentials JSON from Google Cloud Console.\n"
+            "Step 2: Click 'Sign in with Google' to authenticate."
+        )
+        acc_sub.setStyleSheet("font-size: 12px; color: #888888; line-height: 1.4;")
         acc_layout.addWidget(acc_sub)
 
-        acc_status_row = QHBoxLayout()
-        acc_status_lbl = QLabel("Connected Account:")
-        acc_status_lbl.setStyleSheet("font-weight: 500;")
-        acc_status_row.addWidget(acc_status_lbl)
-
-        self.lbl_connected_email = QLabel("Checking...")
-        acc_status_row.addWidget(self.lbl_connected_email)
-        acc_status_row.addStretch()
-
-        self.btn_sign_in = QPushButton("Sign in with Google")
-        self.btn_sign_in.clicked.connect(self._do_sign_in)
-        acc_status_row.addWidget(self.btn_sign_in)
-
-        self.btn_sign_out = QPushButton("Sign Out")
-        self.btn_sign_out.clicked.connect(self._do_sign_out)
-        acc_status_row.addWidget(self.btn_sign_out)
-
-        acc_layout.addLayout(acc_status_row)
-
-        # Credentials status row
+        # 1. Credentials status row
         cred_row = QHBoxLayout()
-        cred_lbl = QLabel("OAuth Credentials:")
-        cred_lbl.setStyleSheet("font-weight: 500;")
+        cred_lbl = QLabel("1. OAuth Credentials:")
+        cred_lbl.setStyleSheet("font-weight: 600;")
         cred_row.addWidget(cred_lbl)
 
         self.lbl_cred_status = QLabel("Checking...")
@@ -123,6 +108,26 @@ class SettingsView(QWidget):
         cred_row.addWidget(self.btn_import_creds)
         acc_layout.addLayout(cred_row)
 
+        # 2. Account status row
+        acc_status_row = QHBoxLayout()
+        acc_status_lbl = QLabel("2. Google Sign-In:")
+        acc_status_lbl.setStyleSheet("font-weight: 600;")
+        acc_status_row.addWidget(acc_status_lbl)
+
+        self.lbl_connected_email = QLabel("Checking...")
+        acc_status_row.addWidget(self.lbl_connected_email)
+        acc_status_row.addStretch()
+
+        self.btn_sign_in = QPushButton("Sign in with Google")
+        self.btn_sign_in.setProperty("class", "primaryButton")
+        self.btn_sign_in.clicked.connect(self._do_sign_in)
+        acc_status_row.addWidget(self.btn_sign_in)
+
+        self.btn_sign_out = QPushButton("Sign Out")
+        self.btn_sign_out.clicked.connect(self._do_sign_out)
+        acc_status_row.addWidget(self.btn_sign_out)
+
+        acc_layout.addLayout(acc_status_row)
         layout.addWidget(acc_box)
 
         # 2. OBS Studio Connection Section
