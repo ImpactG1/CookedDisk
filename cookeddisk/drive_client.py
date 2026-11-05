@@ -83,6 +83,30 @@ class DriveAuthManager:
                     logger.warning(f"Failed to read custom client_secret.json at {p}: {e}")
         return DEFAULT_CLIENT_CONFIG
 
+    def has_custom_client_config(self) -> bool:
+        """Returns True if user has provided their own client_secret.json."""
+        paths = [
+            get_default_app_dir() / "client_secret.json",
+            Path.cwd() / "client_secret.json",
+        ]
+        return any(p.is_file() for p in paths)
+
+    def import_client_secret_file(self, source_path: Path | str) -> bool:
+        """Validates and copies user-provided client_secret JSON to app configuration directory."""
+        src = Path(source_path)
+        if not src.is_file():
+            return False
+        with open(src, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "installed" not in data and "web" not in data:
+            raise ValueError("Invalid client_secret.json format. Expected 'installed' or 'web' root key.")
+        dest = get_default_app_dir() / "client_secret.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"Imported custom OAuth credentials to {dest}")
+        return True
+
     def get_stored_refresh_token(self) -> Optional[str]:
         if keyring:
             try:

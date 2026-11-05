@@ -203,3 +203,29 @@ def test_upload_bandwidth_limiting(tmp_path: Path):
                 res, uri = client.upload_file_resumable(test_file, parent_folder_id="parent1")
                 assert res.file_id == "drive_fid_1"
 
+
+def test_import_client_secret_file(tmp_path: Path):
+    import json
+    from unittest.mock import patch
+    from cookeddisk.drive_client import DriveAuthManager
+
+    auth_mgr = DriveAuthManager()
+    dummy_json = tmp_path / "custom_client_secret.json"
+    dummy_json.write_text(
+        json.dumps({
+            "installed": {
+                "client_id": "custom-client-id.apps.googleusercontent.com",
+                "client_secret": "my-secret-key",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    with patch("cookeddisk.drive_client.get_default_app_dir", return_value=tmp_path):
+        imported = auth_mgr.import_client_secret_file(dummy_json)
+        assert imported is True
+        assert (tmp_path / "client_secret.json").exists()
+        cfg = auth_mgr.get_oauth_client_config()
+        assert cfg["installed"]["client_id"] == "custom-client-id.apps.googleusercontent.com"
+
+

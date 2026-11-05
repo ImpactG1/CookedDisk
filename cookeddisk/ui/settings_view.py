@@ -107,6 +107,22 @@ class SettingsView(QWidget):
         acc_status_row.addWidget(self.btn_sign_out)
 
         acc_layout.addLayout(acc_status_row)
+
+        # Credentials status row
+        cred_row = QHBoxLayout()
+        cred_lbl = QLabel("OAuth Credentials:")
+        cred_lbl.setStyleSheet("font-weight: 500;")
+        cred_row.addWidget(cred_lbl)
+
+        self.lbl_cred_status = QLabel("Checking...")
+        cred_row.addWidget(self.lbl_cred_status)
+        cred_row.addStretch()
+
+        self.btn_import_creds = QPushButton("Import client_secret.json...")
+        self.btn_import_creds.clicked.connect(self._import_credentials)
+        cred_row.addWidget(self.btn_import_creds)
+        acc_layout.addLayout(cred_row)
+
         layout.addWidget(acc_box)
 
         # 2. OBS Studio Connection Section
@@ -308,6 +324,34 @@ class SettingsView(QWidget):
             self.btn_sign_in.setEnabled(True)
             self.btn_sign_out.setEnabled(False)
 
+        if hasattr(self, "lbl_cred_status"):
+            if self.auth_manager.has_custom_client_config():
+                self.lbl_cred_status.setText("Configured (custom client_secret.json)")
+                self.lbl_cred_status.setStyleSheet("font-size: 12px; color: #4ADE80;")
+            else:
+                self.lbl_cred_status.setText("Placeholder (import your Google Cloud credentials)")
+                self.lbl_cred_status.setStyleSheet("font-size: 12px; color: #F59E0B;")
+
+    def _import_credentials(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Google Cloud client_secret.json",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not file_path:
+            return
+        try:
+            self.auth_manager.import_client_secret_file(file_path)
+            self.update_account_display()
+            QMessageBox.information(
+                self,
+                "Credentials Imported",
+                "Successfully imported client_secret.json!\nYou can now click 'Sign in with Google'.",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Import Failed", f"Could not import credentials JSON:\n{e}")
+
     def _browse_obs_dir(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Select OBS Recording Directory")
         if chosen:
@@ -337,12 +381,39 @@ class SettingsView(QWidget):
             )
 
     def _do_sign_in(self) -> None:
+        if not self.auth_manager.has_custom_client_config():
+            reply = QMessageBox.question(
+                self,
+                "OAuth Credentials Required",
+                "Google Drive requires a desktop OAuth client from your Google Cloud Console.\n\n"
+                "Would you like to import your downloaded 'client_secret.json' file now?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._import_credentials()
+                if not self.auth_manager.has_custom_client_config():
+                    return
+
         try:
             self.auth_manager.run_interactive_login()
             self.update_account_display()
             QMessageBox.information(self, "Google Login", "Successfully authenticated with Google Drive!")
         except Exception as e:
-            QMessageBox.critical(self, "Authentication Error", f"Google OAuth failed:\n{e}")
+            err_msg = str(e)
+            if "invalid_client" in err_msg or "deleted" in err_msg:
+                QMessageBox.critical(
+                    self,
+                    "Authentication Error",
+                    "Google returned 'invalid_client'.\nPlease ensure you downloaded the OAuth client JSON for a 'Desktop app' from Google Cloud Console.",
+                )
+            elif "access_denied" in err_msg:
+                QMessageBox.warning(
+                    self,
+                    "Authentication Cancelled",
+                    "Sign-in was cancelled or access was denied.",
+                )
+            else:
+                QMessageBox.critical(self, "Authentication Error", f"Google OAuth failed:\n{e}")
 
     def _do_sign_out(self) -> None:
         self.auth_manager.sign_out()
