@@ -27,9 +27,13 @@ from cookeddisk.logger import get_logger
 
 logger = get_logger("drive_client")
 
+# Allow OAuthLib to accept Google's response when Google automatically appends 'openid' or reorders scopes
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
 ]
 
 KEYRING_SERVICE = "CookedDisk"
@@ -232,6 +236,7 @@ class DriveAuthManager:
         self, custom_client_config: Optional[Dict[str, Any]] = None
     ) -> Credentials:
         """Run loopback OAuth desktop flow."""
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         cfg = custom_client_config or self.get_oauth_client_config()
         flow = InstalledAppFlow.from_client_config(cfg, scopes=SCOPES)
         creds = flow.run_local_server(port=0, prompt="consent")

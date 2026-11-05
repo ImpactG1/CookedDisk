@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+
+# Allow OAuthLib to relax token scope verification when Google adds openid or reorders scopes
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
