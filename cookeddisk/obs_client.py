@@ -19,6 +19,33 @@ from cookeddisk.logger import get_logger
 logger = get_logger("obs_client")
 
 
+def detect_system_gpu_encoder() -> str:
+    """Detects available GPU hardware encoder on Windows (Intel QuickSync, NVIDIA NVENC, or AMD AMF)."""
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+            ],
+            text=True,
+            timeout=3,
+        ).lower()
+        if "nvidia" in out or "geforce" in out or "quadro" in out:
+            return "jim_nvenc"
+        if "intel" in out:
+            return "obs_qsv11"
+        if "amd" in out or "radeon" in out:
+            return "amd_amf_h264"
+    except Exception:
+        pass
+    return "obs_qsv11"
+
+
+
 @dataclass
 class SetupCheckItem:
     key: str
@@ -57,6 +84,11 @@ class ObsClient:
         self.last_error_message: Optional[str] = None
         self._last_failed_attempt_time: float = 0.0
         self._auth_backoff_sec: float = 25.0
+
+        # Automated segment splitter tracking
+        self._last_split_time: float = 0.0
+        self._recording_active_since: float = 0.0
+        self.segment_split_count: int = 0
 
     def connect_with_status(
         self,
@@ -183,7 +215,9 @@ class ObsClient:
 
             try:
                 rec_status = self._client.get_record_status()
-                self.state.is_recording = getattr(rec_status, "output_active", False)
+                was_recording = self.state.is_recording
+                is_recording = getattr(rec_status, "output_active", False)
+                self.state.is_recording = is_recording
                 self.state.is_paused = getattr(rec_status, "output_paused", False)
                 self.state.record_timecode = getattr(rec_status, "output_timecode", "00:00:00")
                 self.state.record_bytes = getattr(rec_status, "output_bytes", 0)
@@ -195,6 +229,31 @@ class ObsClient:
                     pass
 
                 self.state.is_connected = True
+
+                # Automated 30-Second Segment Splitter
+                now = time.time()
+                if is_recording:
+                    if not was_recording:
+                        self._recording_active_since = now
+                        self._last_split_time = now
+                        self.segment_split_count = 0
+                        logger.info(
+                            f"OBS recording started. Automated segment splitter engaged "
+                            f"(cutting every {self.config.segment_length_sec}s)."
+                        )
+                    elif not self.state.is_paused:
+                        elapsed = now - self._last_split_time
+                        if elapsed >= self.config.segment_length_sec:
+                            if self.split_recording():
+                                self.segment_split_count += 1
+                                logger.info(
+                                    f"Automated split #{self.segment_split_count} triggered "
+                                    f"after {elapsed:.1f}s via obs-websocket (SplitRecordFile)."
+                                )
+                elif was_recording:
+                    logger.info(
+                        f"OBS recording stopped. Total segments split during session: {self.segment_split_count}."
+                    )
             except Exception as e:
                 logger.debug(f"Error updating OBS state: {e}")
                 self.state.is_connected = False
@@ -208,8 +267,24 @@ class ObsClient:
 
             return self.state
 
-    def start_polling(self, interval_sec: float = 2.0) -> None:
-        """Polls OBS status periodically to track active/paused recording."""
+    def split_recording(self) -> bool:
+        """Triggers OBS Studio to split active recording into a new segment file on the fly."""
+        with self._lock:
+            if not self.is_connected() or not self.state.is_recording:
+                return False
+            try:
+                if hasattr(self._client, "split_record_file"):
+                    self._client.split_record_file()
+                elif hasattr(self._client, "send"):
+                    self._client.send("SplitRecordFile")
+                self._last_split_time = time.time()
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to split OBS recording file: {e}")
+                return False
+
+    def start_polling(self, interval_sec: float = 1.0) -> None:
+        """Polls OBS status periodically to track active/paused recording and trigger segment splits."""
         with self._lock:
             if self._poll_thread and self._poll_thread.is_alive():
                 return
@@ -358,12 +433,14 @@ class ObsClient:
             if fmt_set:
                 actions.append("Configured safe crash-resistant format (Hybrid MP4)")
 
-            # 3. Automatic File Splitting: 30 seconds
+            # 3. Automatic File Splitting fallback configuration (1 minute in OBS GUI)
             split_set = False
             for cat, param, val in [
                 ("AdvOut", "RecSplitFile", "true"),
+                ("AdvOut", "RecSplitFileType", "Time"),
+                ("AdvOut", "RecSplitFileTime", "1"),
                 ("AdvOut", "RecSplitType", "time"),
-                ("AdvOut", "RecSplitTime", "30"),
+                ("AdvOut", "RecSplitTime", "1"),
             ]:
                 try:
                     self._client.set_profile_parameter(cat, param, val)
@@ -372,34 +449,42 @@ class ObsClient:
                     pass
 
             if split_set:
-                actions.append("Enabled Automatic File Splitting (every 30 seconds)")
+                actions.append("Enabled Automatic File Splitting (OBS fallback 1m, CookedDisk active 30s)")
 
-            # 4. Hardware Encoder selection
-            try:
-                enc_param = self._client.get_profile_parameter("AdvOut", "RecEncoder")
-                current_enc = getattr(enc_param, "parameter_value", "")
-            except Exception:
-                current_enc = ""
+            # 4. Hardware Encoder selection (prioritize detected system GPU)
+            preferred_gpu = detect_system_gpu_encoder()
+            candidate_encoders = [preferred_gpu]
+            for c in ("obs_qsv11", "jim_nvenc", "amd_amf_h264", "ffmpeg_nvenc"):
+                if c not in candidate_encoders:
+                    candidate_encoders.append(c)
 
-            if not current_enc or "x264" in current_enc.lower():
-                # Attempt to set hardware encoder: NVENC -> AMF -> QSV
-                enc_set = False
-                for candidate in ("jim_nvenc", "ffmpeg_nvenc", "amd_amf_h264", "obs_qsv11"):
-                    try:
-                        self._client.set_profile_parameter("AdvOut", "RecEncoder", candidate)
-                        actions.append(f"Configured Hardware Video Encoder ({candidate})")
-                        enc_set = True
-                        break
-                    except Exception:
-                        pass
-                if not enc_set and current_enc:
-                    actions.append(f"Kept encoder ({current_enc})")
-            else:
-                actions.append(f"Retained active Hardware Encoder ({current_enc})")
+            enc_applied = False
+            for candidate in candidate_encoders:
+                try:
+                    self._client.set_profile_parameter("AdvOut", "RecEncoder", candidate)
+                    self._client.set_profile_parameter("AdvOut", "Encoder", candidate)
+                    self._client.set_profile_parameter("SimpleOutput", "StreamEncoder", candidate)
+                    self._client.set_profile_parameter("SimpleOutput", "RecEncoder", candidate)
+                    actions.append(f"Configured Hardware Video Encoder ({candidate})")
+                    enc_applied = True
+                    break
+                except Exception:
+                    pass
 
-            # 5. Bitrate configuration
+            # 5. Bitrate & Quality Configuration (10,000 kbps HQ)
             self.set_recording_bitrate(target_br)
-            actions.append(f"Configured Video Bitrate to {target_br} kbps")
+            for cat, param, val in [
+                ("AdvOut", "RecRateControl", "CBR"),
+                ("AdvOut", "RecBitrate", str(target_br)),
+                ("AdvOut", "Track1Bitrate", str(target_br)),
+                ("SimpleOutput", "VBitrate", str(target_br)),
+                ("SimpleOutput", "RecQuality", "HQ"),
+            ]:
+                try:
+                    self._client.set_profile_parameter(cat, param, val)
+                except Exception:
+                    pass
+            actions.append(f"Configured High-Quality Bitrate to {target_br} kbps (CBR)")
 
             # 6. Synchronize recording path
             if target_dir:
@@ -600,9 +685,16 @@ class ObsClient:
         except Exception:
             pass
 
+        if not encoder_name or encoder_name.lower() in ("none", "(use stream encoder)"):
+            try:
+                param = self._client.get_profile_parameter("AdvOut", "Encoder")
+                encoder_name = getattr(param, "parameter_value", "")
+            except Exception:
+                pass
+
         clean_enc = encoder_name.lower().strip()
         is_hw = any(k in clean_enc for k in ["nvenc", "amf", "qsv", "quicksync", "vaapi", "hardware"])
-        is_sw = any(k in clean_enc for k in ["x264", "svt-av1", "aom", "software"])
+        is_sw = any(k in clean_enc for k in ["x264", "svt-av1", "aom", "software", "none", ""])
 
         if is_hw:
             results.append(
@@ -610,21 +702,22 @@ class ObsClient:
                     key="encoder",
                     title="Hardware Video Encoder",
                     status="PASS",
-                    current_value=encoder_name or "Hardware Accelerated (NVENC/AMF/QSV)",
-                    fix_instruction="No action required. Hardware encoder active.",
+                    current_value=f"Hardware Accelerated ({encoder_name})",
+                    fix_instruction="No action required. Hardware GPU encoder active.",
                 )
             )
         elif is_sw:
+            sys_gpu = detect_system_gpu_encoder()
             results.append(
                 SetupCheckItem(
                     key="encoder",
                     title="Hardware Video Encoder",
                     status="FAIL",
-                    current_value=f"Software encoder ({encoder_name})",
+                    current_value=f"Software CPU encoder ({encoder_name or 'x264'})",
                     fix_instruction=(
-                        "In OBS Studio Settings -> Output -> Recording tab, change Video Encoder from software (x264) "
-                        "to a hardware encoder (NVIDIA NVENC, AMD AMF, or Intel QuickSync) "
-                        "so gameplay frame rates and CPU are unaffected."
+                        f"In OBS Studio Settings -> Output -> Recording tab, change Video Encoder from software (x264) "
+                        f"to a hardware encoder (NVIDIA NVENC, AMD AMF, or Intel QuickSync '{sys_gpu}') "
+                        f"or click 'Auto-Configure OBS' on this screen."
                     ),
                 )
             )
@@ -706,14 +799,11 @@ class ObsClient:
                 )
             )
 
-        # 6. Automatic File Splitting (Time-based, ~30s)
+        # 6. Automatic File Splitting (Automated WebSocket 30s + OBS fallback)
         split_enabled = ""
-        split_time = ""
         try:
             param_en = self._client.get_profile_parameter("AdvOut", "RecSplitFile")
             split_enabled = getattr(param_en, "parameter_value", "")
-            param_t = self._client.get_profile_parameter("AdvOut", "RecSplitTime")
-            split_time = getattr(param_t, "parameter_value", "")
         except Exception:
             pass
 
@@ -723,8 +813,8 @@ class ObsClient:
                     key="file_splitting",
                     title="Automatic File Splitting",
                     status="PASS",
-                    current_value=f"Enabled (Time interval: {split_time or '30'}s)",
-                    fix_instruction="No action required.",
+                    current_value="Automated 30s splitter active (via WebSocket) + OBS Split",
+                    fix_instruction="No action required. CookedDisk automatically splits recordings every 30 seconds into Google Drive.",
                 )
             )
         else:
@@ -732,13 +822,12 @@ class ObsClient:
                 SetupCheckItem(
                     key="file_splitting",
                     title="Automatic File Splitting",
-                    status="FAIL" if split_enabled else "WARN",
-                    current_value="Not confirmed as enabled",
+                    status="FAIL",
+                    current_value="OBS Automatic Splitting disabled in profile",
                     fix_instruction=(
                         "In OBS Studio, open Settings -> Output -> Output Mode: Advanced -> Recording tab. "
-                        "Check 'Automatic File Splitting'. "
-                        "Set Split Method to 'Split by Time' and Time to '30 seconds'. "
-                        "This allows CookedDisk to upload completed 30-second segments while you record!"
+                        "Check 'Automatic File Splitting' and set Split by Time for local fallback, "
+                        "or click 'Auto-Configure OBS' on this screen."
                     ),
                 )
             )

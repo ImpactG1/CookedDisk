@@ -216,3 +216,33 @@ def test_setup_check_shows_auth_error(obs_mock_setup):
         assert "uncheck 'Enable Authentication'" in conn_check.fix_instruction
 
 
+def test_active_segment_splitter_triggers_split(obs_mock_setup):
+    import time
+    client, config = obs_mock_setup
+    config.segment_length_sec = 30
+    mock_req_client = MagicMock()
+    client._client = mock_req_client
+    client.state.is_connected = True
+
+    rec_status = MagicMock()
+    rec_status.output_active = True
+    rec_status.output_paused = False
+    rec_status.output_timecode = "00:00:31"
+    rec_status.output_bytes = 50000000
+    mock_req_client.get_record_status.return_value = rec_status
+
+    # Initial call sets start time
+    client.update_state_now()
+    assert client.state.is_recording is True
+    assert client.segment_split_count == 0
+
+    # Advance time beyond 30s
+    client._last_split_time = time.time() - 35.0
+    client.update_state_now()
+
+    # Verify split_record_file was invoked and count incremented
+    mock_req_client.split_record_file.assert_called_once()
+    assert client.segment_split_count == 1
+
+
+
